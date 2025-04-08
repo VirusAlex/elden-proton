@@ -506,7 +506,7 @@ EOC
             ;;
         "Reinstall Save Manager")
             log_message "Reinstalling save manager"
-            $CURL -sSL "https://raw.githubusercontent.com/Cloudef/elden-proton/refs/heads/master/save_manager.bash" -o "$SCRIPT_DIR/save_manager.bash"
+            $CURL -sSL "https://raw.githubusercontent.com/VirusAlex/elden-proton/refs/heads/master/save_manager.bash" -o "$SCRIPT_DIR/save_manager.bash"
             chmod +x "$SCRIPT_DIR/save_manager.bash"
             log_message "Save manager reinstalled"
             ;;
