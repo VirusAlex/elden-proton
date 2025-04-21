@@ -9,20 +9,22 @@ set -euo pipefail
 # Paths and defaults
 STEAM_PATH="${STEAM_PATH:-"$HOME"/.steam/steam}"
 ER_PATH="${ER_PATH:-$STEAM_PATH/steamapps/common/ELDEN RING/Game}"
+ELDEN_PROTON_DIR="$ER_PATH/EldenProton"
 ZENITY=${STEAM_ZENITY:-zenity}
 UNZIP=${STEAM_UNZIP:-unzip}
 CURL=${STEAM_CURL:-curl}
 SHA256SUM=${STEAM_SHA256SUM:-sha256sum}
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-LOG_FILE="$SCRIPT_DIR/elden-proton.log"
+LOG_FILE="$ELDEN_PROTON_DIR/elden-proton.log"
+
+# URLs
+SAVE_MANAGER_URL="https://raw.githubusercontent.com/VirusAlex/elden-proton/refs/heads/master/save_manager.bash"
 
 # Initialize log file
 log_init() {
-    mkdir -p "$SCRIPT_DIR"
+    mkdir -p "$ELDEN_PROTON_DIR"
     echo "=== Elden Proton Log Started $(date) ===" > "$LOG_FILE"
     echo "STEAM_PATH: $STEAM_PATH" >> "$LOG_FILE"
     echo "ER_PATH: $ER_PATH" >> "$LOG_FILE"
-    echo "SCRIPT_DIR: $SCRIPT_DIR" >> "$LOG_FILE"
     chmod 644 "$LOG_FILE"
 }
 
@@ -173,14 +175,14 @@ download_and_verify() {
         exit 1
     fi
     log_message "Download successful, checksum verified"
-    mkdir -p "$ER_PATH/EldenProton"
-    printf '%s' "$2" > "$ER_PATH/EldenProton/$3.sha256"
+    mkdir -p "$ELDEN_PROTON_DIR"
+    printf '%s' "$2" > "$ELDEN_PROTON_DIR/$3.sha256"
 }
 
 # Function to verify local resource
 verify_local_resource() {
     log_message "Verifying local resource: $1"
-    if [[ -f "$ER_PATH/EldenProton/$1.sha256" ]] && [[ "$(cat "$ER_PATH/EldenProton/$1.sha256")" == "$2" ]]; then
+    if [[ -f "$ELDEN_PROTON_DIR/$1.sha256" ]] && [[ "$(cat "$ELDEN_PROTON_DIR/$1.sha256")" == "$2" ]]; then
         log_message "Resource verified: $1"
         return 0
     else
@@ -211,7 +213,7 @@ dll_mod_list() {
         read -r url
         read -r sha256
     }; do
-        if grep -Fx "$name" "$ER_PATH/EldenProton/dllmods.enabled" > /dev/null; then
+        if grep -Fx "$name" "$ELDEN_PROTON_DIR/dllmods.enabled" > /dev/null; then
             printf '%s\n%s\n' "TRUE" "$name"
         else
             printf '%s\n%s\n' "FALSE" "$name"
@@ -230,7 +232,7 @@ config_list() {
         read -r url
         read -r sha256
     }; do
-        if [[ "x$config" != x ]] && grep -Fx "$name" "$ER_PATH/EldenProton/dllmods.enabled" > /dev/null; then
+        if [[ "x$config" != x ]] && grep -Fx "$name" "$ELDEN_PROTON_DIR/dllmods.enabled" > /dev/null; then
             printf '%s\n%s\n' "$name" "$config"
         fi
     done <<<"$elden_mod_loader_mods"
@@ -246,7 +248,7 @@ download_enabled_dll_mods() {
         read -r url
         read -r sha256
     }; do
-        if grep -Fx "$name" "$ER_PATH/EldenProton/dllmods.enabled" > /dev/null; then
+        if grep -Fx "$name" "$ELDEN_PROTON_DIR/dllmods.enabled" > /dev/null; then
             [[ -f "$ER_PATH/$dll.disabled" ]] && mv "$ER_PATH/$dll.disabled" "$ER_PATH/$dll"
             download_dll_mod "$url" "$sha256" "$name"
         elif [[ -f "$ER_PATH/$dll" ]]; then
@@ -294,16 +296,37 @@ else
 fi
 
 # Ensure EldenProton directory exists
-mkdir -p "$ER_PATH/EldenProton"
+mkdir -p "$ELDEN_PROTON_DIR"
 
 # State files
-[[ -f "$ER_PATH/EldenProton/state" ]] || printf 1 > "$ER_PATH/EldenProton/state"
-[[ -f "$ER_PATH/EldenProton/save_manager.state" ]] || printf 0 > "$ER_PATH/EldenProton/save_manager.state"
+[[ -f "$ELDEN_PROTON_DIR/state" ]] || printf 1 > "$ELDEN_PROTON_DIR/state"
+[[ -f "$ELDEN_PROTON_DIR/save_manager.state" ]] || printf 0 > "$ELDEN_PROTON_DIR/save_manager.state"
+
+# Download save manager script
+download_save_manager() {
+    log_message "Downloading save_manager.bash"
+    if $CURL -sSL "$SAVE_MANAGER_URL" -o "$ELDEN_PROTON_DIR/save_manager.bash"; then
+        chmod +x "$ELDEN_PROTON_DIR/save_manager.bash"
+        log_message "Save manager script downloaded"
+        return 0
+    else
+        log_error "Failed to download save manager script"
+        return 1
+    fi
+}
+
+# Function to ensure save manager is available
+ensure_save_manager() {
+    if [[ ! -f "$ELDEN_PROTON_DIR/save_manager.bash" ]]; then
+        download_save_manager || return 1
+    fi
+    return 0
+}
 
 while :; do
     log_message "Main menu loop"
-    mods_enabled=$(cat "$ER_PATH/EldenProton/state")
-    save_manager_enabled=$(cat "$ER_PATH/EldenProton/save_manager.state")
+    mods_enabled=$(cat "$ELDEN_PROTON_DIR/state")
+    save_manager_enabled=$(cat "$ELDEN_PROTON_DIR/save_manager.state")
 
     # Menu options based on state
     if [[ $mods_enabled == 1 ]]; then
@@ -361,13 +384,12 @@ EOC
 
             if [[ $save_manager_enabled == 1 ]]; then
                 # Ensure save_manager.bash exists
-                if [[ ! -f "$SCRIPT_DIR/save_manager.bash" ]]; then
-                    log_message "Downloading save_manager.bash"
-                    $CURL -sSL "https://raw.githubusercontent.com/Cloudef/elden-proton/main/save_manager.bash" -o "$SCRIPT_DIR/save_manager.bash"
-                    chmod +x "$SCRIPT_DIR/save_manager.bash"
+                if ! ensure_save_manager; then
+                    log_error "Failed to ensure save manager availability"
+                    exit 1
                 fi
                 log_message "Launching save manager"
-                "$SCRIPT_DIR/save_manager.bash" --game-pid=$$ &
+                "$ELDEN_PROTON_DIR/save_manager.bash" --game-pid=$$ &
             fi
 
             if [[ $mods_enabled == 1 ]]; then
@@ -380,7 +402,7 @@ EOC
                 mod_path=
 				# https://github.com/Cloudef/elden-proton/issues/13
                 [[ -f "$ER_PATH/dinput8.dll.disabled" ]] && mv "$ER_PATH/dinput8.dll.disabled" "$ER_PATH/dinput8.dll"
-                [[ -f "$ER_PATH/EldenProton/modengine2.modpath" ]] && mod_path="$(cat "$ER_PATH/EldenProton/modengine2.modpath")"
+                [[ -f "$ELDEN_PROTON_DIR/modengine2.modpath" ]] && mod_path="$(cat "$ELDEN_PROTON_DIR/modengine2.modpath")"
                 log_message "Launching game with command: WINEDLLOVERRIDES=\"dinput8.dll=n,b\" MODENGINE_CONFIG=\"$mod_path\"/config_eldenring.toml $*"
                 WINEDLLOVERRIDES="dinput8.dll=n,b" MODENGINE_CONFIG="$mod_path"/config_eldenring.toml "$@" &
                 game_pid=$!
@@ -402,11 +424,11 @@ EOC
             ;;
         "Enable Mods")
             log_message "Enabling mods"
-            printf 1 > "$ER_PATH/EldenProton/state"
+            printf 1 > "$ELDEN_PROTON_DIR/state"
             ;;
         "Disable Mods")
             log_message "Disabling mods"
-            printf 0 > "$ER_PATH/EldenProton/state"
+            printf 0 > "$ELDEN_PROTON_DIR/state"
             ;;
         "Choose ModEngine2 mod")
             log_message "Selecting ModEngine2 mod"
@@ -417,7 +439,7 @@ EOC
                 log_message "User selected directory: $dir"
                 if [[ -f "$dir/config_eldenring.toml" ]]; then
                     log_message "Valid ModEngine2 mod detected, setting path"
-                    printf '%s' "$dir" > "$ER_PATH/EldenProton/modengine2.modpath"
+                    printf '%s' "$dir" > "$ELDEN_PROTON_DIR/modengine2.modpath"
                 else
                     log_error "No config_eldenring.toml found in selected directory"
                     $ZENITY --error --title "Elden Proton" --text "No config_eldenring.toml in the mod directory, is this really a ModEngine2 mod?"
@@ -433,7 +455,7 @@ EOC
             dll_mod_list | $ZENITY --list --width 700 --height 500 --checklist --title "Elden Proton" --text "" --print-column=2 --separator="\n" --column "Enabled" --column "Mod" > "$tmpdir/dllmods.enabled"
             if [[ $? == 0 ]]; then
                 log_message "User confirmed DLL mod selection"
-                cp -f "$tmpdir/dllmods.enabled" "$ER_PATH/EldenProton/dllmods.enabled"
+                cp -f "$tmpdir/dllmods.enabled" "$ELDEN_PROTON_DIR/dllmods.enabled"
             else
                 log_message "DLL mod selection cancelled"
             fi
@@ -477,20 +499,20 @@ EOC
             save_path="$($ZENITY --file-selection --title "Select Save Path" --directory)"
             set -e
             if [[ "x$save_path" != x ]]; then
-                printf '%s' "$save_path" > "$ER_PATH/EldenProton/save_path"
-                printf 1 > "$ER_PATH/EldenProton/save_manager.state"
+                printf '%s' "$save_path" > "$ELDEN_PROTON_DIR/save_path"
+                printf 1 > "$ELDEN_PROTON_DIR/save_manager.state"
                 log_message "Save path set to: $save_path"
-                # Download save_manager.bash
-                $CURL -sSL "https://raw.githubusercontent.com/Cloudef/elden-proton/main/save_manager.bash" -o "$SCRIPT_DIR/save_manager.bash"
-                chmod +x "$SCRIPT_DIR/save_manager.bash"
-                log_message "Save manager enabled and script downloaded"
-            else
-                log_message "Save path selection cancelled"
+                
+                if ! ensure_save_manager; then
+                    $ZENITY --error --title "Save Manager" --text "Failed to download save manager script"
+                    exit 1
+                fi
+                log_message "Save manager enabled"
             fi
             ;;
         "Disable Save Manager")
             log_message "Disabling save manager"
-            printf 0 > "$ER_PATH/EldenProton/save_manager.state"
+            printf 0 > "$ELDEN_PROTON_DIR/save_manager.state"
             ;;
         "Change Save Path")
             log_message "Changing save path"
@@ -498,7 +520,7 @@ EOC
             save_path="$($ZENITY --file-selection --title "Select New Save Path" --directory)"
             set -e
             if [[ "x$save_path" != x ]]; then
-                printf '%s' "$save_path" > "$ER_PATH/EldenProton/save_path"
+                printf '%s' "$save_path" > "$ELDEN_PROTON_DIR/save_path"
                 log_message "Save path changed to: $save_path"
             else
                 log_message "Save path change cancelled"
@@ -506,9 +528,11 @@ EOC
             ;;
         "Reinstall Save Manager")
             log_message "Reinstalling save manager"
-            $CURL -sSL "https://raw.githubusercontent.com/VirusAlex/elden-proton/refs/heads/master/save_manager.bash" -o "$SCRIPT_DIR/save_manager.bash"
-            chmod +x "$SCRIPT_DIR/save_manager.bash"
-            log_message "Save manager reinstalled"
+            if download_save_manager; then
+                log_message "Save manager reinstalled"
+            else
+                $ZENITY --error --title "Save Manager" --text "Failed to reinstall save manager"
+            fi
             ;;
         *)
             log_message "Main menu cancelled or invalid option selected"

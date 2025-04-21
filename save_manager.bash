@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 
 # Save Manager for Elden Ring
-# Manages save files with a user-friendly interface
+# Manages save files with a simple user-friendly interface
 
 # Paths
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-BACKUP_PATH="$SCRIPT_DIR/er_saves"
 STEAM_PATH="${STEAM_PATH:-"$HOME"/.steam/steam}"
 ER_PATH="${ER_PATH:-$STEAM_PATH/steamapps/common/ELDEN RING/Game}"
-SAVE_PATH_FILE="$ER_PATH/EldenProton/save_path"
-LOG_FILE="$SCRIPT_DIR/elden-proton.log"
+ELDEN_PROTON_DIR="$ER_PATH/EldenProton"
+BACKUP_PATH="$ELDEN_PROTON_DIR/er_saves"
+SAVE_PATH_FILE="$ELDEN_PROTON_DIR/save_path"
+LOG_FILE="$ELDEN_PROTON_DIR/elden-proton.log"
 ZENITY=${STEAM_ZENITY:-zenity}
+# Cache file for improving performance
+CACHE_FILE="$BACKUP_PATH/.save_cache"
 
 # Log messages
 log_message() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SaveManager] $1" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S.%3N')] [SaveManager] $1" >> "$LOG_FILE"
 }
 
 log_message "Starting save manager"
@@ -59,6 +61,8 @@ log_message "Backup directory ensured: $BACKUP_PATH"
 # Array to hold backup files and their timestamps
 declare -a save_files
 declare -a timestamps
+# Variable to track the need for a full cache reload
+need_full_reload=0
 
 # Function to format timestamp for display
 format_datetime() {
@@ -66,19 +70,92 @@ format_datetime() {
     date -d "@$timestamp" "+%Y-%m-%d %H:%M:%S.%3N"
 }
 
-# Function to load save files sorted by creation time
+# Full cache reload - used only on the first run or when "Refresh" is clicked
+full_reload_cache() {
+    log_message "Full cache reload"
+    
+    # Create a new empty cache
+    > "$CACHE_FILE"
+    
+    # Get a list of all files with their timestamps
+    find "$BACKUP_PATH" -name "*.sl2" -type f -printf "%f\t%T@\n" | sort -k2,2nr | \
+    while IFS=$'\t' read -r filename timestamp; do
+        # Get formatted time
+        local formatted_time=$(format_datetime "$timestamp")
+        # Write to cache
+        echo "$filename:${timestamp%.*}:$formatted_time" >> "$CACHE_FILE"
+    done
+    
+    log_message "Cache fully reloaded"
+}
+
+# Function to add a new file to the cache
+add_to_cache() {
+    local filename="$1"
+    local timestamp=$(stat -c %.Y "$BACKUP_PATH/$filename")
+    local formatted_time=$(format_datetime "$timestamp")
+    
+    # Add a record to the beginning of the cache (since new files have a recent date)
+    local tmp_file=$(mktemp)
+    echo "$filename:${timestamp%.*}:$formatted_time" > "$tmp_file"
+    cat "$CACHE_FILE" >> "$tmp_file"
+    mv "$tmp_file" "$CACHE_FILE"
+    
+    log_message "Added row to cache: $filename:${timestamp%.*}:$formatted_time"
+}
+
+# Function to remove a file from the cache
+remove_from_cache() {
+    local filename="$1"
+    grep -v "^$filename:" "$CACHE_FILE" > "$CACHE_FILE.tmp"
+    mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    
+    log_message "Removed from cache: $filename"
+}
+
+# Function to rename a file in the cache while preserving the position
+rename_in_cache() {
+    local old_name="$1"
+    local new_name="$2"
+    
+    # Create a temporary file for the new cache
+    local tmp_file=$(mktemp)
+    
+    # Read the entire cache and replace only the filename, preserving order and timestamps
+    while IFS=: read -r filename timestamp formatted_time; do
+        if [[ "$filename" == "$old_name" ]]; then
+            # For the found file, replace only the name, leaving the timestamps
+            echo "$new_name:$timestamp:$formatted_time" >> "$tmp_file"
+            log_message "Renamed in cache: $old_name -> $new_name:$timestamp:$formatted_time"
+        else
+            # Copy the rest of the files as is
+            echo "$filename:$timestamp:$formatted_time" >> "$tmp_file"
+        fi
+    done < "$CACHE_FILE"
+    
+    # Replace the cache with the new file
+    mv "$tmp_file" "$CACHE_FILE"
+}
+
+# Function to load save files from cache
 load_save_files() {
     save_files=()
     timestamps=()
     log_message "Loading save files"
     
-    # remove .sl2 from the filename before putting it to the array
-    while IFS=$'\t' read -r timestamp file; do
-        save_files+=("$(basename "$file" .sl2)")
-        # Format the timestamp to human-readable format
-        formatted_time=$(format_datetime "$timestamp")
-        timestamps+=("$formatted_time")
-    done < <(find "$BACKUP_PATH" -name "*.sl2" -printf "%T@\t%p\n" | sort -r -n)
+    # Check if the cache exists and is needed to be updated
+    if [[ ! -f "$CACHE_FILE" ]] || [[ $need_full_reload -eq 1 ]]; then
+        full_reload_cache
+        need_full_reload=0
+    fi
+    
+    # Load data from cache
+    while IFS=: read -r filename timestamp formatted_time; do
+        if [[ -n "$filename" && -n "$timestamp" && -n "$formatted_time" ]]; then
+            save_files+=("${filename%.sl2}")
+            timestamps+=("$formatted_time")
+        fi
+    done < "$CACHE_FILE"
     
     log_message "Save files loaded: ${#save_files[@]} files"
 }
@@ -91,7 +168,9 @@ backup_save_file() {
     log_message "Creating save file: \`$save_file\`"
     if cp "$SAVE_PATH/ER0000.sl2" "$save_file"; then
         log_message "Save file created: \`$save_file\`"
-        # return the save file name to caller
+        # Add a new file to the cache directly
+        add_to_cache "$save_file_name"
+        # Return the name of the created file
         echo "$save_file_name"
     else
         log_message "Failed to backup save file"
@@ -123,7 +202,9 @@ rename_save_file() {
         
         if mv "$BACKUP_PATH/$selected" "$BACKUP_PATH/$new_name"; then
             log_message "Save file renamed to: \`$new_name\`"
-            # return new_name to caller
+            # Rename in cache directly
+            rename_in_cache "$selected" "$new_name"
+            # Return the new name
             echo "$new_name"
         else
             log_message "Failed to rename save file"
@@ -144,6 +225,8 @@ restore_save_file() {
         return
     fi
     log_message "Current save backed up: \`$backup_file\`"
+    # Add a new backup directly to the cache
+    add_to_cache "load_${timestamp}.sl2"
 
     selected="$1"
     log_message "Restoring save file: \`$selected\`"
@@ -161,6 +244,8 @@ delete_save_file() {
     log_message "Deleting save file: \`$selected\`"
     if rm "$BACKUP_PATH/$selected"; then
         log_message "Save file deleted: \`$selected\`"
+        # Remove the file from the cache directly
+        remove_from_cache "$selected"
         return 0
     else
         log_message "Failed to delete save file"
@@ -176,7 +261,7 @@ last_action_description=""
 
 while true; do
     # Prepare header text
-    header_text="<b>Save Manager for Elden Ring</b>"
+    header_text="<b>Save Manager for Elden Ring</b> (${#save_files[@]} files)"
     if [[ -n "$selected_save_file" ]]; then
         header_text="$header_text\n<b>Selected file:</b> $selected_save_file"
     else
@@ -253,6 +338,7 @@ while true; do
             if [[ -n "$save_file" ]]; then
                 last_action_description="Quicksave created: \`$save_file\`"
                 selected_save_file="$save_file"
+                # Reload the save_files and timestamps arrays without scanning the directory
                 load_save_files
             else
                 last_action_description="Failed to create quicksave"
@@ -264,6 +350,7 @@ while true; do
                     if delete_save_file "$selected_save_file"; then
                         last_action_description="Save file \`$selected_save_file\` deleted"
                         selected_save_file=""
+                        # Reload the save_files and timestamps arrays without scanning the directory
                         load_save_files
                     else
                         last_action_description="Failed to delete save file \`$selected_save_file\`"
@@ -283,6 +370,7 @@ while true; do
                 else
                     last_action_description="Failed to rename save"
                 fi
+                # Reload the save_files and timestamps arrays without scanning the directory
                 load_save_files
             else
                 $ZENITY --error --title "Save Manager" --text "Please select a save file to rename"
@@ -290,12 +378,15 @@ while true; do
             fi
             ;;
         "Refresh")
+            # Full cache reload when Refresh is clicked
+            need_full_reload=1
             load_save_files
             last_action_description="Reloaded ${#save_files[@]} save files"
             ;;
         "Load")
             if [[ -n "$selected_save_file" ]]; then
                 restore_save_file "$selected_save_file"
+                # Reload the save_files and timestamps arrays without scanning the directory
                 load_save_files
                 last_action_description="Save loaded: \`$selected_save_file\`"
             else
