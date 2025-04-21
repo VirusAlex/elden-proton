@@ -6,9 +6,25 @@ Added Save Manager to provide an easy way to manage your Elden Ring save files:
 - Load previous save states
 - Delete unwanted saves
 
-All backup saves are stored in the `er_saves` directory next to the script.
+All backup saves are stored in the `er_saves` directory in `ELDEN RING/Game/EldenProton` folder.
 
-The original README remains the same (with respect to Cloudef)
+## Usage
+- Place the `elden-proton.bash` into your preferred location and mark it as executable (`chmod +x` from shell)\
+or just run
+```bash
+curl -s -o elden-proton.bash https://raw.githubusercontent.com/VirusAlex/elden-proton/refs/heads/master/elden-proton.bash && chmod +x elden-proton.bash && ./elden-proton.bash
+```
+- Set the provided launch options in steam for Elden Ring (see screenshot below)
+- Launch Elden Ring from steam and select "Enable Save Manager" in the launcher UI
+
+![manager ui](.github/images/manager_menu.jpg)
+![with selected save](.github/images/select_save.jpg)
+
+You may switch between the save manager and the game at any time through the Steam -> Switch Window.
+![switch window](.github/images/switch_window.jpg)
+
+
+The original README remains the same (with respect to [Cloudef](https://github.com/Cloudef/elden-proton))
 
 # elden-proton
 
